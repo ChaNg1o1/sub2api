@@ -1260,18 +1260,27 @@ func (p *openAIWSConnPool) pickLeastBusyConnLocked(ap *openAIWSAccountPool, pref
 	}
 	var best *openAIWSConn
 	var bestWaiters int32
+	var bestLeased bool
+	var bestPrewarmed bool
 	var bestLastUsed time.Time
 	for _, conn := range ap.conns {
 		if conn == nil {
 			continue
 		}
 		waiters := conn.waiters.Load()
+		leased := conn.isLeased()
+		prewarmed := conn.isPrewarmed()
 		lastUsed := conn.lastUsedAt()
 		if best == nil ||
 			waiters < bestWaiters ||
-			(waiters == bestWaiters && lastUsed.Before(bestLastUsed)) {
+			(waiters == bestWaiters && !leased && bestLeased) ||
+			(waiters == bestWaiters && leased == bestLeased && prewarmed && !bestPrewarmed) ||
+			(waiters == bestWaiters && leased == bestLeased && prewarmed == bestPrewarmed &&
+				(bestLastUsed.IsZero() || lastUsed.After(bestLastUsed))) {
 			best = conn
 			bestWaiters = waiters
+			bestLeased = leased
+			bestPrewarmed = prewarmed
 			bestLastUsed = lastUsed
 		}
 	}

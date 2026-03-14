@@ -886,7 +886,7 @@ func (s *OpenAIGatewayService) openAIWSSchedulerWeights() GatewayOpenAIWSSchedul
 		Load:      1.0,
 		Queue:     0.7,
 		ErrorRate: 0.8,
-		TTFT:      0.5,
+		TTFT:      0.7,
 	}
 }
 

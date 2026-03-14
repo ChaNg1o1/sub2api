@@ -1367,6 +1367,33 @@ func TestOpenAIWSConnPool_TargetConnCountAndPrewarmBranches(t *testing.T) {
 	apFail.mu.Unlock()
 }
 
+func TestOpenAIWSConnPool_PickLeastBusyConnLockedPrefersWarmReusableConn(t *testing.T) {
+	pool := newOpenAIWSConnPool(&config.Config{})
+	ap := &openAIWSAccountPool{conns: map[string]*openAIWSConn{}}
+
+	cold := newOpenAIWSConn("cold_idle", 1, &openAIWSFakeConn{}, nil)
+	cold.lastUsedNano.Store(time.Now().Add(-time.Minute).UnixNano())
+
+	warm := newOpenAIWSConn("warm_idle", 1, &openAIWSFakeConn{}, nil)
+	warm.markPrewarmed()
+	warm.lastUsedNano.Store(time.Now().UnixNano())
+
+	busy := newOpenAIWSConn("busy_recent", 1, &openAIWSFakeConn{}, nil)
+	busy.markPrewarmed()
+	busy.lastUsedNano.Store(time.Now().Add(time.Minute).UnixNano())
+	require.True(t, busy.tryAcquire(), "leased conn should lose the tie against an idle warm conn")
+
+	ap.conns[cold.id] = cold
+	ap.conns[warm.id] = warm
+	ap.conns[busy.id] = busy
+
+	got := pool.pickLeastBusyConnLocked(ap, "")
+	require.NotNil(t, got)
+	require.Equal(t, warm.id, got.id)
+
+	busy.release()
+}
+
 func TestOpenAIWSConnPool_Acquire_ErrorBranches(t *testing.T) {
 	var nilPool *openAIWSConnPool
 	_, err := nilPool.Acquire(context.Background(), openAIWSAcquireRequest{})
