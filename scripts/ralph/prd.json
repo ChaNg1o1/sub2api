@@ -1,0 +1,99 @@
+{
+  "project": "sub2api",
+  "branchName": "ralph/ttft-performance-optimization",
+  "description": "Optimize sub2api OpenAI streaming and WebSocket hot paths to reduce TTFT tail latency and expose the breakdown needed to verify the fix.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Persist TTFT breakdown fields in usage logs",
+      "description": "As an operator, I want OpenAI WS requests to store queue wait and connection-pick metadata so that I can identify whether TTFT regressions come from queueing, connection selection, or downstream flushing.",
+      "acceptanceCriteria": [
+        "Add backward-compatible usage log fields for `openai_ws_queue_wait_ms`, `openai_ws_conn_pick_ms`, and `openai_ws_conn_reused`",
+        "Persist the OpenAI WS timing values already captured on request context into usage log writes and repository models",
+        "Targeted Go tests cover usage-log persistence for records with and without WS timing metadata",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "Completed on 2026-03-14. Added usage_log schema + migration columns, threaded WS timing metadata through handler/service/repository, and covered persistence/scan paths with targeted tests."
+    },
+    {
+      "id": "US-002",
+      "title": "Expose TTFT breakdown in Ops request details",
+      "description": "As an operator, I want the Ops request details view to show queue wait, connection-pick time, and connection reuse so that I can validate whether TTFT improvements are real and understand their cause.",
+      "acceptanceCriteria": [
+        "Ops request detail API includes `openai_ws_queue_wait_ms`, `openai_ws_conn_pick_ms`, and `openai_ws_conn_reused` when present",
+        "The admin Ops request detail UI renders the new WS timing fields and hides them cleanly for non-WS requests",
+        "Existing TTFT and latency views continue to work for legacy records without the new fields",
+        "Tests pass",
+        "Verify in browser using available browser tooling",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Completed on 2026-03-14. Exposed WS TTFT breakdown fields through Ops request detail API and admin modal, added repository + Vue tests, and passed frontend typecheck. Browser automation tooling was unavailable in this session."
+    },
+    {
+      "id": "US-003",
+      "title": "Flush the first SSE token immediately",
+      "description": "As a user, I want the first streamed token on the HTTP/SSE path to be flushed immediately so that the response feels responsive even when later events stay buffered.",
+      "acceptanceCriteria": [
+        "In the HTTP/SSE streaming path, the first non-empty non-`[DONE]` `data:` event forces an immediate downstream flush",
+        "The first-token timing is recorded from the same first token event that is flushed to the client path",
+        "Targeted Go tests cover first-token flush behavior with batching enabled and disabled",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Completed on 2026-03-14. HTTP/SSE streaming now records TTFT from the first token event instead of early metadata and forces that token to bypass queue-based batching. Covered with targeted streaming tests and full internal/service regression."
+    },
+    {
+      "id": "US-004",
+      "title": "Flush the first WS token without batch delay",
+      "description": "As a user, I want the first token on the OpenAI WS streaming path to bypass batch waiting so that the WS fast path also improves TTFT under load.",
+      "acceptanceCriteria": [
+        "The WS forwarder flushes buffered pre-token events immediately when the first token event arrives",
+        "The first token event bypasses `event_flush_batch_size` and `event_flush_interval_ms` delays",
+        "Targeted Go tests cover buffered pre-token events, first-token flush, and terminal-event flush behavior",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Completed on 2026-03-14. WS forwarder now flushes buffered pre-token events and the first token event immediately, without waiting for event batch thresholds. Targeted tests cover buffered pre-token, first-token flush, and terminal completion delivery."
+    },
+    {
+      "id": "US-005",
+      "title": "Add a queue-wait budget for WS TTFT tails",
+      "description": "As a user, I want overloaded WS requests to stop queueing forever before the first token so that TTFT tails are capped under contention.",
+      "acceptanceCriteria": [
+        "Add a configurable OpenAI WS queue-wait budget for the pre-first-token stage",
+        "When queue wait exceeds the budget and no downstream bytes were sent yet, the request exits through the existing safe fallback or fast-fail path instead of continuing to queue",
+        "Warm reusable connections still proceed immediately without tripping the budget",
+        "Targeted Go tests cover reused-connection, queue-budget-exceeded, and fallback behavior",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Completed on 2026-03-15. Added configurable `gateway.openai_ws.queue_wait_budget_ms`, enforced it inside WS pool queue waits so TTFT tails cut off before lease acquisition, and surfaced the result through existing fast-fail handling. Covered with config validation, fallback mapping, immediate-reuse success, and queue-budget fast-fail tests."
+    },
+    {
+      "id": "US-006",
+      "title": "Prefer warm low-TTFT paths in scheduler and prewarm logic",
+      "description": "As an operator, I want the OpenAI WS scheduler to bias toward warm reusable paths so that steady-state TTFT stays low without constant manual tuning.",
+      "acceptanceCriteria": [
+        "Scheduler or acquisition logic prefers reusable or prewarmed WS connections when candidates are otherwise comparable",
+        "TTFT-oriented defaults or scoring weights are updated without regressing existing priority, load, and error-rate safeguards",
+        "Targeted tests or benchmarks cover reusable-versus-cold selection and prewarm cooldown behavior",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Completed on 2026-03-15. Warm-path selection now prefers idle prewarmed and recently-used reusable WS connections when load is otherwise comparable, and the default WS scheduler TTFT weight was increased from 0.5 to 0.7. Covered with targeted pool tie-break and prewarm cooldown tests plus full internal/service regression."
+    }
+  ]
+}
