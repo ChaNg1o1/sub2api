@@ -28,7 +28,7 @@ import (
 	gocache "github.com/patrickmn/go-cache"
 )
 
-const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, media_type, service_tier, reasoning_effort, cache_ttl_overridden, created_at"
+const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, input_cost, output_cost, cache_creation_cost, cache_read_cost, total_cost, actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, openai_ws_queue_wait_ms, openai_ws_conn_pick_ms, openai_ws_conn_reused, user_agent, ip_address, image_count, image_size, media_type, service_tier, reasoning_effort, cache_ttl_overridden, created_at"
 
 var usageLogInsertArgTypes = [...]string{
 	"bigint",
@@ -58,6 +58,9 @@ var usageLogInsertArgTypes = [...]string{
 	"boolean",
 	"integer",
 	"integer",
+	"integer",
+	"integer",
+	"boolean",
 	"text",
 	"text",
 	"integer",
@@ -297,6 +300,9 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			openai_ws_mode,
 			duration_ms,
 			first_token_ms,
+			openai_ws_queue_wait_ms,
+			openai_ws_conn_pick_ms,
+			openai_ws_conn_reused,
 			user_agent,
 			ip_address,
 			image_count,
@@ -312,7 +318,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			$8, $9, $10, $11,
 			$12, $13,
 			$14, $15, $16, $17, $18, $19,
-			$20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36
+			$20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -725,6 +731,9 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			openai_ws_mode,
 			duration_ms,
 			first_token_ms,
+			openai_ws_queue_wait_ms,
+			openai_ws_conn_pick_ms,
+			openai_ws_conn_reused,
 			user_agent,
 			ip_address,
 			image_count,
@@ -736,7 +745,7 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			created_at
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(keys)*37)
+	args := make([]any, 0, len(keys)*40)
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -792,6 +801,9 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				openai_ws_mode,
 				duration_ms,
 				first_token_ms,
+				openai_ws_queue_wait_ms,
+				openai_ws_conn_pick_ms,
+				openai_ws_conn_reused,
 				user_agent,
 				ip_address,
 				image_count,
@@ -830,6 +842,9 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				openai_ws_mode,
 				duration_ms,
 				first_token_ms,
+				openai_ws_queue_wait_ms,
+				openai_ws_conn_pick_ms,
+				openai_ws_conn_reused,
 				user_agent,
 				ip_address,
 				image_count,
@@ -908,6 +923,9 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			openai_ws_mode,
 			duration_ms,
 			first_token_ms,
+			openai_ws_queue_wait_ms,
+			openai_ws_conn_pick_ms,
+			openai_ws_conn_reused,
 			user_agent,
 			ip_address,
 			image_count,
@@ -919,7 +937,7 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			created_at
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*36)
+	args := make([]any, 0, len(preparedList)*39)
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -972,6 +990,9 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			openai_ws_mode,
 			duration_ms,
 			first_token_ms,
+			openai_ws_queue_wait_ms,
+			openai_ws_conn_pick_ms,
+			openai_ws_conn_reused,
 			user_agent,
 			ip_address,
 			image_count,
@@ -1010,6 +1031,9 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			openai_ws_mode,
 			duration_ms,
 			first_token_ms,
+			openai_ws_queue_wait_ms,
+			openai_ws_conn_pick_ms,
+			openai_ws_conn_reused,
 			user_agent,
 			ip_address,
 			image_count,
@@ -1056,6 +1080,9 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			openai_ws_mode,
 			duration_ms,
 			first_token_ms,
+			openai_ws_queue_wait_ms,
+			openai_ws_conn_pick_ms,
+			openai_ws_conn_reused,
 			user_agent,
 			ip_address,
 			image_count,
@@ -1071,7 +1098,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$8, $9, $10, $11,
 			$12, $13,
 			$14, $15, $16, $17, $18, $19,
-			$20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36
+			$20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1095,6 +1122,9 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	subscriptionID := nullInt64(log.SubscriptionID)
 	duration := nullInt(log.DurationMs)
 	firstToken := nullInt(log.FirstTokenMs)
+	openAIWSQueueWait := nullInt(log.OpenAIWSQueueWaitMs)
+	openAIWSConnPick := nullInt(log.OpenAIWSConnPickMs)
+	openAIWSConnReused := nullBool(log.OpenAIWSConnReused)
 	userAgent := nullString(log.UserAgent)
 	ipAddress := nullString(log.IPAddress)
 	imageSize := nullString(log.ImageSize)
@@ -1107,49 +1137,54 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 		requestIDArg = requestID
 	}
 
+	args := []any{
+		log.UserID,
+		log.APIKeyID,
+		log.AccountID,
+		requestIDArg,
+		log.Model,
+		groupID,
+		subscriptionID,
+		log.InputTokens,
+		log.OutputTokens,
+		log.CacheCreationTokens,
+		log.CacheReadTokens,
+		log.CacheCreation5mTokens,
+		log.CacheCreation1hTokens,
+		log.InputCost,
+		log.OutputCost,
+		log.CacheCreationCost,
+		log.CacheReadCost,
+		log.TotalCost,
+		log.ActualCost,
+		rateMultiplier,
+		log.AccountRateMultiplier,
+		log.BillingType,
+		requestType,
+		log.Stream,
+		log.OpenAIWSMode,
+		duration,
+		firstToken,
+		openAIWSQueueWait,
+		openAIWSConnPick,
+		openAIWSConnReused,
+		userAgent,
+		ipAddress,
+		log.ImageCount,
+		imageSize,
+		mediaType,
+		serviceTier,
+		reasoningEffort,
+		log.CacheTTLOverridden,
+		createdAt,
+	}
+
 	return usageLogInsertPrepared{
 		createdAt:      createdAt,
 		requestID:      requestID,
 		rateMultiplier: rateMultiplier,
 		requestType:    requestType,
-		args: []any{
-			log.UserID,
-			log.APIKeyID,
-			log.AccountID,
-			requestIDArg,
-			log.Model,
-			groupID,
-			subscriptionID,
-			log.InputTokens,
-			log.OutputTokens,
-			log.CacheCreationTokens,
-			log.CacheReadTokens,
-			log.CacheCreation5mTokens,
-			log.CacheCreation1hTokens,
-			log.InputCost,
-			log.OutputCost,
-			log.CacheCreationCost,
-			log.CacheReadCost,
-			log.TotalCost,
-			log.ActualCost,
-			rateMultiplier,
-			log.AccountRateMultiplier,
-			log.BillingType,
-			requestType,
-			log.Stream,
-			log.OpenAIWSMode,
-			duration,
-			firstToken,
-			userAgent,
-			ipAddress,
-			log.ImageCount,
-			imageSize,
-			mediaType,
-			serviceTier,
-			reasoningEffort,
-			log.CacheTTLOverridden,
-			createdAt,
-		},
+		args:           args,
 	}
 }
 
@@ -3534,6 +3569,9 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		openaiWSMode          bool
 		durationMs            sql.NullInt64
 		firstTokenMs          sql.NullInt64
+		openAIWSQueueWaitMs   sql.NullInt64
+		openAIWSConnPickMs    sql.NullInt64
+		openAIWSConnReused    sql.NullBool
 		userAgent             sql.NullString
 		ipAddress             sql.NullString
 		imageCount            int
@@ -3574,6 +3612,9 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&openaiWSMode,
 		&durationMs,
 		&firstTokenMs,
+		&openAIWSQueueWaitMs,
+		&openAIWSConnPickMs,
+		&openAIWSConnReused,
 		&userAgent,
 		&ipAddress,
 		&imageCount,
@@ -3637,6 +3678,18 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	if firstTokenMs.Valid {
 		value := int(firstTokenMs.Int64)
 		log.FirstTokenMs = &value
+	}
+	if openAIWSQueueWaitMs.Valid {
+		value := int(openAIWSQueueWaitMs.Int64)
+		log.OpenAIWSQueueWaitMs = &value
+	}
+	if openAIWSConnPickMs.Valid {
+		value := int(openAIWSConnPickMs.Int64)
+		log.OpenAIWSConnPickMs = &value
+	}
+	if openAIWSConnReused.Valid {
+		value := openAIWSConnReused.Bool
+		log.OpenAIWSConnReused = &value
 	}
 	if userAgent.Valid {
 		log.UserAgent = &userAgent.String

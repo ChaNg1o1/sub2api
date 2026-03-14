@@ -856,6 +856,47 @@ func TestOpenAIGatewayServiceRecordUsage_UsesBillingModelAndMetadataFields(t *te
 	require.Equal(t, 1, userRepo.deductCalls)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_PersistsOpenAIWSTimingFields(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+
+	queueWaitMs := 48
+	connPickMs := 9
+	connReused := true
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:    "resp_ws_timing_fields",
+			Model:        "gpt-5.1",
+			Stream:       true,
+			OpenAIWSMode: true,
+			Usage: OpenAIUsage{
+				InputTokens:  20,
+				OutputTokens: 10,
+			},
+			Duration:     2 * time.Second,
+			FirstTokenMs: func() *int { v := 120; return &v }(),
+		},
+		APIKey:              &APIKey{ID: 10},
+		User:                &User{ID: 20},
+		Account:             &Account{ID: 30},
+		OpenAIWSQueueWaitMs: &queueWaitMs,
+		OpenAIWSConnPickMs:  &connPickMs,
+		OpenAIWSConnReused:  &connReused,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.OpenAIWSQueueWaitMs)
+	require.Equal(t, queueWaitMs, *usageRepo.lastLog.OpenAIWSQueueWaitMs)
+	require.NotNil(t, usageRepo.lastLog.OpenAIWSConnPickMs)
+	require.Equal(t, connPickMs, *usageRepo.lastLog.OpenAIWSConnPickMs)
+	require.NotNil(t, usageRepo.lastLog.OpenAIWSConnReused)
+	require.Equal(t, connReused, *usageRepo.lastLog.OpenAIWSConnReused)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_SubscriptionBillingSetsSubscriptionFields(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}

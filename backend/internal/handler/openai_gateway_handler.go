@@ -353,19 +353,23 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
+		wsUsageTiming := captureOpenAIWSUsageTiming(c)
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 		h.submitUsageRecordTask(func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
-				Result:             result,
-				APIKey:             apiKey,
-				User:               apiKey.User,
-				Account:            account,
-				Subscription:       subscription,
-				UserAgent:          userAgent,
-				IPAddress:          clientIP,
-				RequestPayloadHash: requestPayloadHash,
-				APIKeyService:      h.apiKeyService,
+				Result:              result,
+				APIKey:              apiKey,
+				User:                apiKey.User,
+				Account:             account,
+				Subscription:        subscription,
+				UserAgent:           userAgent,
+				IPAddress:           clientIP,
+				RequestPayloadHash:  requestPayloadHash,
+				OpenAIWSQueueWaitMs: wsUsageTiming.QueueWaitMs,
+				OpenAIWSConnPickMs:  wsUsageTiming.ConnPickMs,
+				OpenAIWSConnReused:  wsUsageTiming.ConnReused,
+				APIKeyService:       h.apiKeyService,
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.responses"),
@@ -730,18 +734,22 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
+		wsUsageTiming := captureOpenAIWSUsageTiming(c)
 
 		h.submitUsageRecordTask(func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
-				Result:             result,
-				APIKey:             apiKey,
-				User:               apiKey.User,
-				Account:            account,
-				Subscription:       subscription,
-				UserAgent:          userAgent,
-				IPAddress:          clientIP,
-				RequestPayloadHash: requestPayloadHash,
-				APIKeyService:      h.apiKeyService,
+				Result:              result,
+				APIKey:              apiKey,
+				User:                apiKey.User,
+				Account:             account,
+				Subscription:        subscription,
+				UserAgent:           userAgent,
+				IPAddress:           clientIP,
+				RequestPayloadHash:  requestPayloadHash,
+				OpenAIWSQueueWaitMs: wsUsageTiming.QueueWaitMs,
+				OpenAIWSConnPickMs:  wsUsageTiming.ConnPickMs,
+				OpenAIWSConnReused:  wsUsageTiming.ConnReused,
+				APIKeyService:       h.apiKeyService,
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.messages"),
@@ -1228,17 +1236,21 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, result.ResponseHeaders)
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
+			wsUsageTiming := captureOpenAIWSUsageTiming(c)
 			h.submitUsageRecordTask(func(taskCtx context.Context) {
 				if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
-					Result:             result,
-					APIKey:             apiKey,
-					User:               apiKey.User,
-					Account:            account,
-					Subscription:       subscription,
-					UserAgent:          userAgent,
-					IPAddress:          clientIP,
-					RequestPayloadHash: service.HashUsageRequestPayload(firstMessage),
-					APIKeyService:      h.apiKeyService,
+					Result:              result,
+					APIKey:              apiKey,
+					User:                apiKey.User,
+					Account:             account,
+					Subscription:        subscription,
+					UserAgent:           userAgent,
+					IPAddress:           clientIP,
+					RequestPayloadHash:  service.HashUsageRequestPayload(firstMessage),
+					OpenAIWSQueueWaitMs: wsUsageTiming.QueueWaitMs,
+					OpenAIWSConnPickMs:  wsUsageTiming.ConnPickMs,
+					OpenAIWSConnReused:  wsUsageTiming.ConnReused,
+					APIKeyService:       h.apiKeyService,
 				}); err != nil {
 					reqLog.Error("openai.websocket_record_usage_failed",
 						zap.Int64("account_id", account.ID),
@@ -1370,6 +1382,46 @@ func getContextInt64(c *gin.Context, key string) (int64, bool) {
 		return int64(t), true
 	default:
 		return 0, false
+	}
+}
+
+type openAIWSUsageTiming struct {
+	QueueWaitMs *int
+	ConnPickMs  *int
+	ConnReused  *bool
+}
+
+func captureOpenAIWSUsageTiming(c *gin.Context) openAIWSUsageTiming {
+	return openAIWSUsageTiming{
+		QueueWaitMs: getContextIntPtr(c, service.OpsOpenAIWSQueueWaitMsKey),
+		ConnPickMs:  getContextIntPtr(c, service.OpsOpenAIWSConnPickMsKey),
+		ConnReused:  getContextBoolPtr(c, service.OpsOpenAIWSConnReusedKey),
+	}
+}
+
+func getContextIntPtr(c *gin.Context, key string) *int {
+	value, ok := getContextInt64(c, key)
+	if !ok {
+		return nil
+	}
+	v := int(value)
+	return &v
+}
+
+func getContextBoolPtr(c *gin.Context, key string) *bool {
+	if c == nil || key == "" {
+		return nil
+	}
+	v, ok := c.Get(key)
+	if !ok {
+		return nil
+	}
+	switch t := v.(type) {
+	case bool:
+		value := t
+		return &value
+	default:
+		return nil
 	}
 }
 

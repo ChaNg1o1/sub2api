@@ -4031,7 +4031,11 @@ type OpenAIRecordUsageInput struct {
 	UserAgent          string // 请求的 User-Agent
 	IPAddress          string // 请求的客户端 IP 地址
 	RequestPayloadHash string
-	APIKeyService      APIKeyQuotaUpdater
+	// Best-effort OpenAI WS timing metadata copied from gin context before async usage logging.
+	OpenAIWSQueueWaitMs *int
+	OpenAIWSConnPickMs  *int
+	OpenAIWSConnReused  *bool
+	APIKeyService       APIKeyQuotaUpdater
 }
 
 // RecordUsage records usage and deducts balance
@@ -4123,6 +4127,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		OpenAIWSMode:          result.OpenAIWSMode,
 		DurationMs:            &durationMs,
 		FirstTokenMs:          result.FirstTokenMs,
+		OpenAIWSQueueWaitMs:   input.OpenAIWSQueueWaitMs,
+		OpenAIWSConnPickMs:    input.OpenAIWSConnPickMs,
+		OpenAIWSConnReused:    input.OpenAIWSConnReused,
 		CreatedAt:             time.Now(),
 	}
 

@@ -66,6 +66,9 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			true,
 			sqlmock.AnyArg(), // duration_ms
 			sqlmock.AnyArg(), // first_token_ms
+			sqlmock.AnyArg(), // openai_ws_queue_wait_ms
+			sqlmock.AnyArg(), // openai_ws_conn_pick_ms
+			sqlmock.AnyArg(), // openai_ws_conn_reused
 			sqlmock.AnyArg(), // user_agent
 			sqlmock.AnyArg(), // ip_address
 			log.ImageCount,
@@ -86,6 +89,79 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 	require.Equal(t, service.RequestTypeWSV2, log.RequestType)
 	require.True(t, log.Stream)
 	require.True(t, log.OpenAIWSMode)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUsageLogRepositoryCreate_PersistsOpenAIWSTimingFields(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	createdAt := time.Date(2025, 1, 3, 12, 0, 0, 0, time.UTC)
+	queueWaitMs := 41
+	connPickMs := 6
+	connReused := true
+	log := &service.UsageLog{
+		UserID:              1,
+		APIKeyID:            2,
+		AccountID:           3,
+		RequestID:           "req-ws-timing",
+		Model:               "gpt-5",
+		RequestType:         service.RequestTypeWSV2,
+		Stream:              true,
+		OpenAIWSMode:        true,
+		OpenAIWSQueueWaitMs: &queueWaitMs,
+		OpenAIWSConnPickMs:  &connPickMs,
+		OpenAIWSConnReused:  &connReused,
+		CreatedAt:           createdAt,
+	}
+
+	mock.ExpectQuery("INSERT INTO usage_logs").
+		WithArgs(
+			log.UserID,
+			log.APIKeyID,
+			log.AccountID,
+			log.RequestID,
+			log.Model,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			log.InputTokens,
+			log.OutputTokens,
+			log.CacheCreationTokens,
+			log.CacheReadTokens,
+			log.CacheCreation5mTokens,
+			log.CacheCreation1hTokens,
+			log.InputCost,
+			log.OutputCost,
+			log.CacheCreationCost,
+			log.CacheReadCost,
+			log.TotalCost,
+			log.ActualCost,
+			log.RateMultiplier,
+			log.AccountRateMultiplier,
+			log.BillingType,
+			int16(service.RequestTypeWSV2),
+			true,
+			true,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			queueWaitMs,
+			connPickMs,
+			connReused,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			log.ImageCount,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			log.CacheTTLOverridden,
+			createdAt,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(101), createdAt))
+
+	inserted, err := repo.Create(context.Background(), log)
+	require.NoError(t, err)
+	require.True(t, inserted)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -132,6 +208,9 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			int16(service.RequestTypeSync),
 			false,
 			false,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
 			sqlmock.AnyArg(),
@@ -369,6 +448,9 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			false, // legacy openai ws
 			sql.NullInt64{},
 			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullBool{},
 			sql.NullString{},
 			sql.NullString{},
 			0,
@@ -408,6 +490,9 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			false,
 			sql.NullInt64{},
 			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullBool{},
 			sql.NullString{},
 			sql.NullString{},
 			0,
@@ -447,6 +532,9 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			false,
 			sql.NullInt64{},
 			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullBool{},
 			sql.NullString{},
 			sql.NullString{},
 			0,
@@ -460,6 +548,49 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
 		require.Equal(t, "priority", *log.ServiceTier)
+	})
+
+	t.Run("openai_ws_timing_fields_are_scanned", func(t *testing.T) {
+		now := time.Now().UTC()
+		log, err := scanUsageLog(usageLogScannerStub{values: []any{
+			int64(4),
+			int64(13),
+			int64(23),
+			int64(33),
+			sql.NullString{Valid: true, String: "req-4"},
+			"gpt-5.4",
+			sql.NullInt64{},
+			sql.NullInt64{},
+			1, 2, 3, 4, 5, 6,
+			0.1, 0.2, 0.3, 0.4, 1.0, 0.9,
+			1.0,
+			sql.NullFloat64{},
+			int16(service.BillingTypeBalance),
+			int16(service.RequestTypeWSV2),
+			true,
+			true,
+			sql.NullInt64{},
+			sql.NullInt64{},
+			sql.NullInt64{Valid: true, Int64: 44},
+			sql.NullInt64{Valid: true, Int64: 7},
+			sql.NullBool{Valid: true, Bool: true},
+			sql.NullString{},
+			sql.NullString{},
+			0,
+			sql.NullString{},
+			sql.NullString{},
+			sql.NullString{},
+			sql.NullString{},
+			false,
+			now,
+		}})
+		require.NoError(t, err)
+		require.NotNil(t, log.OpenAIWSQueueWaitMs)
+		require.Equal(t, 44, *log.OpenAIWSQueueWaitMs)
+		require.NotNil(t, log.OpenAIWSConnPickMs)
+		require.Equal(t, 7, *log.OpenAIWSConnPickMs)
+		require.NotNil(t, log.OpenAIWSConnReused)
+		require.True(t, *log.OpenAIWSConnReused)
 	})
 
 }

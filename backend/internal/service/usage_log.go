@@ -131,8 +131,12 @@ type UsageLog struct {
 	OpenAIWSMode bool
 	DurationMs   *int
 	FirstTokenMs *int
-	UserAgent    *string
-	IPAddress    *string
+	// OpenAI WS TTFT breakdown fields are best-effort and nil for non-WS or legacy records.
+	OpenAIWSQueueWaitMs *int
+	OpenAIWSConnPickMs  *int
+	OpenAIWSConnReused  *bool
+	UserAgent           *string
+	IPAddress           *string
 
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool
