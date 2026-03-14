@@ -66,7 +66,11 @@ var openAIWSLogValueReplacer = strings.NewReplacer(
 	"failed", "fail",
 )
 
-var openAIWSIngressPreflightPingIdle = 20 * time.Second
+var (
+	openAIWSIngressPreflightPingIdle = 20 * time.Second
+
+	errOpenAIWSQueueWaitBudgetExceeded = errors.New("openai ws queue wait budget exceeded")
+)
 
 // openAIWSFallbackError 表示可安全回退到 HTTP 的 WS 错误（尚未写下游）。
 type openAIWSFallbackError struct {
@@ -1065,6 +1069,35 @@ func (s *OpenAIGatewayService) openAIWSAcquireTimeout() time.Duration {
 	return dial + 2*time.Second
 }
 
+func (s *OpenAIGatewayService) openAIWSQueueWaitBudget() time.Duration {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.QueueWaitBudgetMS > 0 {
+		return time.Duration(s.cfg.Gateway.OpenAIWS.QueueWaitBudgetMS) * time.Millisecond
+	}
+	return 0
+}
+
+func (s *OpenAIGatewayService) openAIWSLeaseQueueWaitBudgetExceeded(lease *openAIWSConnLease) (queueWait time.Duration, budget time.Duration, exceeded bool) {
+	if lease == nil {
+		return 0, 0, false
+	}
+	queueWait = lease.QueueWaitDuration()
+	budget = s.openAIWSQueueWaitBudget()
+	if budget <= 0 || queueWait <= 0 || queueWait <= budget {
+		return queueWait, budget, false
+	}
+	return queueWait, budget, true
+}
+
+func openAIWSQueueWaitBudgetError(queueWait time.Duration, budget time.Duration) error {
+	if queueWait < 0 {
+		queueWait = 0
+	}
+	if budget < 0 {
+		budget = 0
+	}
+	return fmt.Errorf("openai ws queue wait %s exceeded budget %s: %w", queueWait, budget, errOpenAIWSQueueWaitBudgetExceeded)
+}
+
 func (s *OpenAIGatewayService) buildOpenAIResponsesWSURL(account *Account) (string, error) {
 	if account == nil {
 		return "", errors.New("account is nil")
@@ -1859,8 +1892,25 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
-	defer lease.Release()
 	connID := strings.TrimSpace(lease.ConnID())
+	if queueWait, budget, exceeded := s.openAIWSLeaseQueueWaitBudgetExceeded(lease); exceeded {
+		logOpenAIWSModeInfo(
+			"queue_wait_budget_exceeded account_id=%d account_type=%s transport=%s conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d budget_ms=%d preferred_conn_id=%s has_previous_response_id=%v",
+			account.ID,
+			account.Type,
+			normalizeOpenAIWSLogValue(string(decision.Transport)),
+			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+			lease.Reused(),
+			lease.ConnPickDuration().Milliseconds(),
+			queueWait.Milliseconds(),
+			budget.Milliseconds(),
+			truncateOpenAIWSLogValue(preferredConnID, openAIWSIDValueMaxLen),
+			previousResponseID != "",
+		)
+		lease.Release()
+		return nil, wrapOpenAIWSFallback("queue_wait_budget_exceeded", openAIWSQueueWaitBudgetError(queueWait, budget))
+	}
+	defer lease.Release()
 	logOpenAIWSModeDebug(
 		"connected account_id=%d account_type=%s transport=%s conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d has_previous_response_id=%v",
 		account.ID,
@@ -2667,6 +2717,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, acquireErr
 		}
 		connID := strings.TrimSpace(lease.ConnID())
+		if queueWait, budget, exceeded := s.openAIWSLeaseQueueWaitBudgetExceeded(lease); exceeded {
+			logOpenAIWSModeInfo(
+				"ingress_ws_queue_wait_budget_exceeded account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d budget_ms=%d preferred_conn_id=%s",
+				account.ID,
+				turn,
+				truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+				lease.Reused(),
+				lease.ConnPickDuration().Milliseconds(),
+				queueWait.Milliseconds(),
+				budget.Milliseconds(),
+				truncateOpenAIWSLogValue(preferred, openAIWSIDValueMaxLen),
+			)
+			lease.Release()
+			return nil, NewOpenAIWSClientCloseError(
+				coderws.StatusTryAgainLater,
+				"upstream websocket is busy, please retry later",
+				openAIWSQueueWaitBudgetError(queueWait, budget),
+			)
+		}
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
 			turnState = handshakeTurnState
 			if stateStore != nil && sessionHash != "" {
@@ -3871,6 +3940,9 @@ func classifyOpenAIWSAcquireError(err error) string {
 	}
 	if errors.Is(err, errOpenAIWSConnQueueFull) {
 		return "conn_queue_full"
+	}
+	if errors.Is(err, errOpenAIWSQueueWaitBudgetExceeded) {
+		return "queue_wait_budget_exceeded"
 	}
 	if errors.Is(err, errOpenAIWSPreferredConnUnavailable) {
 		return "preferred_conn_unavailable"

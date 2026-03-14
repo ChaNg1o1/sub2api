@@ -601,6 +601,13 @@ func (p *openAIWSConnPool) SnapshotTransportMetrics() OpenAIWSTransportMetricsSn
 	return OpenAIWSTransportMetricsSnapshot{}
 }
 
+func (p *openAIWSConnPool) queueWaitBudget() time.Duration {
+	if p != nil && p.cfg != nil && p.cfg.Gateway.OpenAIWS.QueueWaitBudgetMS > 0 {
+		return time.Duration(p.cfg.Gateway.OpenAIWS.QueueWaitBudgetMS) * time.Millisecond
+	}
+	return 0
+}
+
 func (p *openAIWSConnPool) setClientDialerForTest(dialer openAIWSClientDialer) {
 	if p == nil || dialer == nil {
 		return
@@ -778,6 +785,27 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 	return p.acquire(ctx, cloneOpenAIWSAcquireRequest(req), 0)
 }
 
+func (p *openAIWSConnPool) waitForQueuedConn(ctx context.Context, conn *openAIWSConn) (time.Duration, error) {
+	waitStart := time.Now()
+	waitCtx := ctx
+	cancel := func() {}
+	budget := p.queueWaitBudget()
+	if budget > 0 {
+		waitCtx, cancel = context.WithTimeout(ctx, budget)
+	}
+	err := conn.acquire(waitCtx)
+	cancel()
+
+	queueWait := time.Since(waitStart)
+	if err == nil {
+		return queueWait, nil
+	}
+	if budget > 0 && ctx.Err() == nil && waitCtx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+		return queueWait, openAIWSQueueWaitBudgetError(queueWait, budget)
+	}
+	return queueWait, err
+}
+
 func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireRequest, retry int) (*openAIWSConnLease, error) {
 	if p == nil || req.Account == nil || req.Account.ID <= 0 {
 		return nil, errors.New("invalid ws acquire request")
@@ -858,10 +886,13 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 			ap.mu.Unlock()
 			closeOpenAIWSConns(evicted)
 			defer preferredConn.waiters.Add(-1)
-			waitStart := time.Now()
 			p.metrics.acquireQueueWaitTotal.Add(1)
 
-			if err := preferredConn.acquire(ctx); err != nil {
+			queueWait, err := p.waitForQueuedConn(ctx, preferredConn)
+			if err != nil {
+				if queueWait > 0 && errors.Is(err, errOpenAIWSQueueWaitBudgetExceeded) {
+					p.metrics.acquireQueueWaitMs.Add(queueWait.Milliseconds())
+				}
 				if errors.Is(err, errOpenAIWSConnClosed) && retry < 1 {
 					return p.acquire(ctx, req, retry+1)
 				}
@@ -879,7 +910,6 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 				}
 			}
 
-			queueWait := time.Since(waitStart)
 			p.metrics.acquireQueueWaitMs.Add(queueWait.Milliseconds())
 			lease := &openAIWSConnLease{
 				pool:      p,
@@ -1033,10 +1063,13 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 	ap.mu.Unlock()
 	closeOpenAIWSConns(evicted)
 	defer target.waiters.Add(-1)
-	waitStart := time.Now()
 	p.metrics.acquireQueueWaitTotal.Add(1)
 
-	if err := target.acquire(ctx); err != nil {
+	queueWait, err := p.waitForQueuedConn(ctx, target)
+	if err != nil {
+		if queueWait > 0 && errors.Is(err, errOpenAIWSQueueWaitBudgetExceeded) {
+			p.metrics.acquireQueueWaitMs.Add(queueWait.Milliseconds())
+		}
 		if errors.Is(err, errOpenAIWSConnClosed) && retry < 1 {
 			return p.acquire(ctx, req, retry+1)
 		}
@@ -1054,7 +1087,6 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 		}
 	}
 
-	queueWait := time.Since(waitStart)
 	p.metrics.acquireQueueWaitMs.Add(queueWait.Milliseconds())
 	lease := &openAIWSConnLease{pool: p, accountID: accountID, conn: target, queueWait: queueWait, connPick: connPick, reused: true}
 	p.metrics.acquireReuseTotal.Add(1)

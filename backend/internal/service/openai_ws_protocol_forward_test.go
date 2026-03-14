@@ -856,6 +856,155 @@ func TestOpenAIGatewayService_Forward_WSv2RetryFiveTimesThenFallbackHTTP(t *test
 	require.Equal(t, int32(openAIWSReconnectRetryLimit+1), wsAttempts.Load())
 }
 
+func TestOpenAIGatewayService_Forward_WSv2ImmediateReuseSkipsQueueWaitBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 4
+	cfg.Gateway.OpenAIWS.QueueWaitBudgetMS = 1
+
+	account := &Account{
+		ID:          8902,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://api.openai.com/v1/responses",
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	pool := newOpenAIWSConnPool(cfg)
+	fakeConn := &openAIWSFakeConn{}
+	conn := newOpenAIWSConn("warm_reuse", account.ID, fakeConn, nil)
+	ap := pool.getOrCreateAccountPool(account.ID)
+	ap.mu.Lock()
+	ap.conns[conn.id] = conn
+	ap.lastCleanupAt = time.Now()
+	ap.mu.Unlock()
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+
+	body := []byte(`{"model":"gpt-5.3-codex","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.OpenAIWSMode)
+	require.Equal(t, "resp_fake", result.RequestID)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"id":"resp_fake"}`, rec.Body.String())
+	require.Len(t, fakeConn.payload, 1, "queue budget should not block immediate warm reuse")
+
+	metrics := pool.SnapshotMetrics()
+	require.Equal(t, int64(1), metrics.AcquireReuseTotal)
+	require.Equal(t, int64(0), metrics.AcquireQueueWaitTotal)
+}
+
+func TestOpenAIGatewayService_Forward_WSv2QueueWaitBudgetExceededFastFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_http_unused","usage":{"input_tokens":1,"output_tokens":1}}`)),
+		},
+	}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 4
+	cfg.Gateway.OpenAIWS.QueueWaitBudgetMS = 20
+
+	account := &Account{
+		ID:          8903,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://api.openai.com/v1/responses",
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	pool := newOpenAIWSConnPool(cfg)
+	fakeConn := &openAIWSFakeConn{}
+	conn := newOpenAIWSConn("busy_budget", account.ID, fakeConn, nil)
+	require.True(t, conn.tryAcquire(), "pre-acquire connection to force queue wait")
+	ap := pool.getOrCreateAccountPool(account.ID)
+	ap.mu.Lock()
+	ap.conns[conn.id] = conn
+	ap.lastCleanupAt = time.Now()
+	ap.mu.Unlock()
+
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		conn.release()
+	}()
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+
+	body := []byte(`{"model":"gpt-5.3-codex","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	startedAt := time.Now()
+	result, err := svc.Forward(context.Background(), c, account, body)
+	elapsed := time.Since(startedAt)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, errOpenAIWSQueueWaitBudgetExceeded)
+	require.Contains(t, err.Error(), "queue_wait_budget_exceeded")
+	require.Less(t, elapsed, 100*time.Millisecond, "queue wait budget should cut off the wait before the held connection is released")
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, strings.ToLower(rec.Body.String()), "busy")
+	require.Nil(t, upstream.lastReq, "queue budget fast-fail should not fall back to HTTP")
+	require.Len(t, fakeConn.payload, 0, "budget reject should happen before any upstream write")
+}
+
 func TestOpenAIGatewayService_Forward_WSv2FirstTokenFlushBypassesBatchDelay(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

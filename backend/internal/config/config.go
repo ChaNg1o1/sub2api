@@ -560,6 +560,8 @@ type GatewayOpenAIWSConfig struct {
 	WriteTimeoutSeconds   int     `mapstructure:"write_timeout_seconds"`
 	PoolTargetUtilization float64 `mapstructure:"pool_target_utilization"`
 	QueueLimitPerConn     int     `mapstructure:"queue_limit_per_conn"`
+	// QueueWaitBudgetMS: 首 token 前允许的排队预算（毫秒）；0 表示关闭预算限制
+	QueueWaitBudgetMS int `mapstructure:"queue_wait_budget_ms"`
 	// EventFlushBatchSize: WS 流式写出批量 flush 阈值（事件条数）
 	EventFlushBatchSize int `mapstructure:"event_flush_batch_size"`
 	// EventFlushIntervalMS: WS 流式写出最大等待时间（毫秒）；0 表示仅按 batch 触发
@@ -1359,6 +1361,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.write_timeout_seconds", 120)
 	viper.SetDefault("gateway.openai_ws.pool_target_utilization", 0.7)
 	viper.SetDefault("gateway.openai_ws.queue_limit_per_conn", 64)
+	viper.SetDefault("gateway.openai_ws.queue_wait_budget_ms", 500)
 	viper.SetDefault("gateway.openai_ws.event_flush_batch_size", 1)
 	viper.SetDefault("gateway.openai_ws.event_flush_interval_ms", 10)
 	viper.SetDefault("gateway.openai_ws.prewarm_cooldown_ms", 300)
@@ -2028,6 +2031,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.QueueLimitPerConn <= 0 {
 		return fmt.Errorf("gateway.openai_ws.queue_limit_per_conn must be positive")
+	}
+	if c.Gateway.OpenAIWS.QueueWaitBudgetMS < 0 {
+		return fmt.Errorf("gateway.openai_ws.queue_wait_budget_ms must be non-negative")
 	}
 	if c.Gateway.OpenAIWS.EventFlushBatchSize <= 0 {
 		return fmt.Errorf("gateway.openai_ws.event_flush_batch_size must be positive")

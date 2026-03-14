@@ -154,6 +154,17 @@ func TestResolveOpenAIWSFallbackErrorResponse(t *testing.T) {
 		require.Equal(t, "forbidden", upstreamMessage)
 	})
 
+	t.Run("queue_wait_budget_exceeded_maps_to_service_unavailable", func(t *testing.T) {
+		statusCode, errType, clientMessage, upstreamMessage, ok := resolveOpenAIWSFallbackErrorResponse(
+			wrapOpenAIWSFallback("queue_wait_budget_exceeded", openAIWSQueueWaitBudgetError(900*time.Millisecond, 500*time.Millisecond)),
+		)
+		require.True(t, ok)
+		require.Equal(t, http.StatusServiceUnavailable, statusCode)
+		require.Equal(t, "upstream_error", errType)
+		require.Equal(t, "upstream websocket is busy, please retry later", clientMessage)
+		require.Equal(t, "upstream websocket is busy, please retry later", upstreamMessage)
+	})
+
 	t.Run("non_fallback_error_not_resolved", func(t *testing.T) {
 		_, _, _, _, ok := resolveOpenAIWSFallbackErrorResponse(errors.New("plain error"))
 		require.False(t, ok)
@@ -195,6 +206,15 @@ func TestOpenAIWSRetryTotalBudget(t *testing.T) {
 
 	svc.cfg.Gateway.OpenAIWS.RetryTotalBudgetMS = 0
 	require.Equal(t, time.Duration(0), svc.openAIWSRetryTotalBudget())
+}
+
+func TestOpenAIWSQueueWaitBudget(t *testing.T) {
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	svc.cfg.Gateway.OpenAIWS.QueueWaitBudgetMS = 500
+	require.Equal(t, 500*time.Millisecond, svc.openAIWSQueueWaitBudget())
+
+	svc.cfg.Gateway.OpenAIWS.QueueWaitBudgetMS = 0
+	require.Equal(t, time.Duration(0), svc.openAIWSQueueWaitBudget())
 }
 
 func TestClassifyOpenAIWSReadFallbackReason(t *testing.T) {

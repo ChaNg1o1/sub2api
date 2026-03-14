@@ -481,6 +481,7 @@ func classifyOpenAIWSReconnectReason(err error) (string, bool) {
 		"ws_unsupported",
 		"auth_failed",
 		"invalid_encrypted_content",
+		"queue_wait_budget_exceeded",
 		"previous_response_not_found":
 		return reason, false
 	}
@@ -563,6 +564,11 @@ func resolveOpenAIWSFallbackErrorResponse(err error) (statusCode int, errType st
 		if statusCode == 0 {
 			statusCode = http.StatusTooManyRequests
 		}
+	case "queue_wait_budget_exceeded":
+		if statusCode == 0 {
+			statusCode = http.StatusServiceUnavailable
+		}
+		upstreamMessage = "upstream websocket is busy, please retry later"
 	default:
 		if statusCode == 0 {
 			return 0, "", "", "", false

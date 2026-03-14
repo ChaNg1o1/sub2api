@@ -1383,6 +1383,11 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			wantErr: "gateway.openai_ws.queue_limit_per_conn",
 		},
 		{
+			name:    "queue_wait_budget_ms 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.QueueWaitBudgetMS = -1 },
+			wantErr: "gateway.openai_ws.queue_wait_budget_ms",
+		},
+		{
 			name:    "fallback_cooldown_seconds 不能为负数",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.FallbackCooldownSeconds = -1 },
 			wantErr: "gateway.openai_ws.fallback_cooldown_seconds",
