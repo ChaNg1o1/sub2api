@@ -3226,6 +3226,8 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 	usage := &OpenAIUsage{}
 	var firstTokenMs *int
+	firstDataEventFlushed := false
+	firstTokenEventFlushed := false
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
@@ -3348,6 +3350,10 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			if openAIStreamEventIsTerminal(data) {
 				sawTerminalEvent = true
 			}
+			eventType := openAISSEEventType(dataBytes)
+			nonEmptyDataEvent := data != "" && data != "[DONE]"
+			shouldFlushFirstDataEvent := nonEmptyDataEvent && !firstDataEventFlushed
+			shouldFlushFirstTokenEvent := isOpenAITokenEventType(eventType) && !firstTokenEventFlushed
 
 			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
 			if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {
@@ -3358,11 +3364,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected {
-				shouldFlush := queueDrained
-				if firstTokenMs == nil && data != "" && data != "[DONE]" {
-					// 保证首个 token 事件尽快出站，避免影响 TTFT。
-					shouldFlush = true
-				}
+				shouldFlush := queueDrained || shouldFlushFirstDataEvent || shouldFlushFirstTokenEvent
 				if _, err := bufferedWriter.WriteString(line); err != nil {
 					clientDisconnected = true
 					logger.LegacyPrintf("service.openai_gateway", "Client disconnected during streaming, continuing to drain upstream for billing")
@@ -3377,10 +3379,17 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				}
 			}
 
-			// Record first token time
-			if firstTokenMs == nil && data != "" && data != "[DONE]" {
+			if shouldFlushFirstDataEvent {
+				firstDataEventFlushed = true
+			}
+
+			// Record first token time from the same token event that bypasses batching.
+			if firstTokenMs == nil && isOpenAITokenEventType(eventType) {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
+			}
+			if shouldFlushFirstTokenEvent {
+				firstTokenEventFlushed = true
 			}
 			s.parseSSEUsageBytes(dataBytes, usage)
 			return
@@ -3509,6 +3518,33 @@ func extractOpenAISSEDataLine(line string) (string, bool) {
 		start++
 	}
 	return line[start:], true
+}
+
+func openAISSEEventType(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(gjson.GetBytes(data, "type").String())
+}
+
+func isOpenAITokenEventType(eventType string) bool {
+	if eventType == "" {
+		return false
+	}
+	switch eventType {
+	case "response.created", "response.in_progress", "response.output_item.added", "response.output_item.done":
+		return false
+	}
+	if strings.Contains(eventType, ".delta") {
+		return true
+	}
+	if strings.HasPrefix(eventType, "response.output_text") {
+		return true
+	}
+	if strings.HasPrefix(eventType, "response.output") {
+		return true
+	}
+	return eventType == "response.completed" || eventType == "response.done"
 }
 
 func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel string) string {

@@ -106,6 +106,19 @@ func (w *failingGinWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
+type flushSnapshotGinWriter struct {
+	gin.ResponseWriter
+	rec            *httptest.ResponseRecorder
+	flushSnapshots []string
+}
+
+func (w *flushSnapshotGinWriter) Flush() {
+	if w.rec != nil {
+		w.flushSnapshots = append(w.flushSnapshots, w.rec.Body.String())
+	}
+	w.ResponseWriter.Flush()
+}
+
 func (c stubConcurrencyCache) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
 	if c.acquireResults != nil {
 		if result, ok := c.acquireResults[accountID]; ok {
@@ -1280,6 +1293,91 @@ func TestOpenAIStreamingReuseScannerBufferAndStillWorks(t *testing.T) {
 	require.Equal(t, 1, result.usage.InputTokens)
 	require.Equal(t, 2, result.usage.OutputTokens)
 	require.Equal(t, 3, result.usage.CacheReadInputTokens)
+}
+
+func TestOpenAIStreamingFirstTokenTimingUsesTokenEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0,
+			StreamKeepaliveInterval:   0,
+			MaxLineSize:               defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       pr,
+		Header:     http.Header{},
+	}
+
+	start := time.Now()
+	go func() {
+		defer func() { _ = pw.Close() }()
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.created\"}\n"))
+		time.Sleep(25 * time.Millisecond)
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n"))
+	}()
+
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, start, "model", "model")
+	_ = pr.Close()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.firstTokenMs)
+	require.GreaterOrEqual(t, *result.firstTokenMs, 20)
+}
+
+func TestOpenAIStreamingFirstTokenFlushBypassesBatching(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			StreamDataIntervalTimeout: 0,
+			StreamKeepaliveInterval:   1,
+			MaxLineSize:               defaultMaxLineSize,
+		},
+	}
+	svc := &OpenAIGatewayService{cfg: cfg}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	flushWriter := &flushSnapshotGinWriter{ResponseWriter: c.Writer, rec: rec}
+	c.Writer = flushWriter
+
+	pr, pw := io.Pipe()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       pr,
+		Header:     http.Header{},
+	}
+
+	go func() {
+		defer func() { _ = pw.Close() }()
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.created\"}\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n"))
+		_, _ = pw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n"))
+	}()
+
+	result, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, &Account{ID: 1}, time.Now(), "model", "model")
+	_ = pr.Close()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	foundDeltaOnlyFlush := false
+	for _, snapshot := range flushWriter.flushSnapshots {
+		if strings.Contains(snapshot, "response.output_text.delta") && !strings.Contains(snapshot, "response.completed") {
+			foundDeltaOnlyFlush = true
+			break
+		}
+	}
+	require.True(t, foundDeltaOnlyFlush, "expected first token event to flush before response.completed is written")
 }
 
 func TestOpenAIInvalidBaseURLWhenAllowlistDisabled(t *testing.T) {
