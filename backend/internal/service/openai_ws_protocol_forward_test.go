@@ -856,6 +856,95 @@ func TestOpenAIGatewayService_Forward_WSv2RetryFiveTimesThenFallbackHTTP(t *test
 	require.Equal(t, int32(openAIWSReconnectRetryLimit+1), wsAttempts.Load())
 }
 
+func TestOpenAIGatewayService_Forward_WSv2FirstTokenFlushBypassesBatchDelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket failed: %v", err)
+			return
+		}
+		defer func() {
+			_ = conn.Close()
+		}()
+
+		var req map[string]any
+		if err := conn.ReadJSON(&req); err != nil {
+			t.Errorf("read ws request failed: %v", err)
+			return
+		}
+
+		for _, payload := range [][]byte{
+			[]byte(`{"type":"response.created","response":{"id":"resp_ws_flush"}}`),
+			[]byte(`{"type":"response.output_text.delta","delta":"hello"}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_ws_flush","usage":{"input_tokens":1,"output_tokens":1}}}`),
+		} {
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Errorf("write websocket payload failed: %v", err)
+				return
+			}
+		}
+	}))
+	defer wsServer.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+	flushWriter := &flushSnapshotGinWriter{ResponseWriter: c.Writer, rec: rec}
+	c.Writer = flushWriter
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.EventFlushBatchSize = 4
+	cfg.Gateway.OpenAIWS.EventFlushIntervalMS = 1000
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+
+	account := &Account{
+		ID:          90,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": wsServer.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	body := []byte(`{"model":"gpt-5.3-codex","stream":true,"input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.OpenAIWSMode)
+	require.NotNil(t, result.FirstTokenMs)
+
+	foundDeltaOnlyFlush := false
+	for _, snapshot := range flushWriter.flushSnapshots {
+		if strings.Contains(snapshot, "response.output_text.delta") && !strings.Contains(snapshot, "response.completed") {
+			foundDeltaOnlyFlush = true
+			break
+		}
+	}
+	require.True(t, foundDeltaOnlyFlush, "expected first token event to flush before response.completed is written")
+	require.Contains(t, rec.Body.String(), "response.completed", "expected terminal event to still flush downstream")
+}
+
 func TestOpenAIGatewayService_Forward_WSv2PolicyViolationFastFallbackHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

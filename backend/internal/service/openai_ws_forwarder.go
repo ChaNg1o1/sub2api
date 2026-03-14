@@ -2102,11 +2102,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if isTokenEvent {
 			tokenEventCount++
 		}
+		isFirstTokenEvent := firstTokenMs == nil && isTokenEvent
 		isTerminalEvent := isOpenAIWSTerminalEvent(eventType)
 		if isTerminalEvent {
 			terminalEventCount++
 		}
-		if firstTokenMs == nil && isTokenEvent {
+		if isFirstTokenEvent {
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
 		}
@@ -2228,7 +2229,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			} else {
 				flushBufferedStreamEvents(eventType)
-				emitStreamMessage(message, isTerminalEvent)
+				emitStreamMessage(message, isFirstTokenEvent || isTerminalEvent)
 			}
 		} else {
 			if responseField.Exists() && responseField.Type == gjson.JSON {
