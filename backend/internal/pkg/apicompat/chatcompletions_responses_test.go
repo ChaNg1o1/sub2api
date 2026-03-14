@@ -111,6 +111,7 @@ func TestChatCompletionsToResponses_ToolCalls(t *testing.T) {
 	require.Len(t, resp.Tools, 1)
 	assert.Equal(t, "function", resp.Tools[0].Type)
 	assert.Equal(t, "ping", resp.Tools[0].Name)
+	assert.JSONEq(t, `{"type":"object","properties":{},"additionalProperties":false}`, string(resp.Tools[0].Parameters))
 }
 
 func TestChatCompletionsToResponses_MaxTokens(t *testing.T) {
@@ -202,6 +203,7 @@ func TestChatCompletionsToResponses_LegacyFunctions(t *testing.T) {
 	require.Len(t, resp.Tools, 1)
 	assert.Equal(t, "function", resp.Tools[0].Type)
 	assert.Equal(t, "get_weather", resp.Tools[0].Name)
+	assert.JSONEq(t, `{"type":"object","properties":{},"additionalProperties":false}`, string(resp.Tools[0].Parameters))
 
 	// tool_choice should be converted
 	require.NotNil(t, resp.ToolChoice)

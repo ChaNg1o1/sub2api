@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -448,6 +449,12 @@ func normalizeCodexTools(reqBody map[string]any) bool {
 		}
 
 		// OpenAI Responses-style tools use top-level name/parameters.
+		if params, ok := toolMap["parameters"]; ok {
+			if normalized, changed := normalizeFunctionToolParameters(params); changed {
+				toolMap["parameters"] = normalized
+				modified = true
+			}
+		}
 		if name, ok := toolMap["name"].(string); ok && strings.TrimSpace(name) != "" {
 			validTools = append(validTools, toolMap)
 			continue
@@ -476,7 +483,16 @@ func normalizeCodexTools(reqBody map[string]any) bool {
 		}
 		if _, ok := toolMap["parameters"]; !ok {
 			if params, ok := function["parameters"]; ok {
-				toolMap["parameters"] = params
+				if normalized, changed := normalizeFunctionToolParameters(params); changed {
+					toolMap["parameters"] = normalized
+				} else {
+					toolMap["parameters"] = params
+				}
+				modified = true
+			}
+		} else if params, ok := toolMap["parameters"]; ok {
+			if normalized, changed := normalizeFunctionToolParameters(params); changed {
+				toolMap["parameters"] = normalized
 				modified = true
 			}
 		}
@@ -495,4 +511,76 @@ func normalizeCodexTools(reqBody map[string]any) bool {
 	}
 
 	return modified
+}
+
+func normalizeFunctionToolParameters(value any) (any, bool) {
+	params, ok := value.(map[string]any)
+	if !ok || params == nil {
+		return value, false
+	}
+
+	normalized := cloneSchemaMap(params)
+	changed := false
+
+	typ, _ := normalized["type"].(string)
+	if strings.TrimSpace(typ) == "" {
+		normalized["type"] = "object"
+		changed = true
+		typ = "object"
+	}
+
+	if typ != "object" {
+		return value, changed
+	}
+
+	if _, ok := normalized["properties"]; !ok {
+		normalized["properties"] = map[string]any{}
+		changed = true
+	}
+
+	if required, ok := normalized["required"].([]any); ok && len(required) == 0 {
+		delete(normalized, "required")
+		changed = true
+	}
+
+	if _, ok := normalized["additionalProperties"]; !ok {
+		normalized["additionalProperties"] = false
+		changed = true
+	}
+
+	if !changed {
+		return value, false
+	}
+
+	return normalized, true
+}
+
+func cloneSchemaMap(src map[string]any) map[string]any {
+	if src == nil {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(src))
+	for key, value := range src {
+		cloned[key] = deepCloneSchemaValue(value)
+	}
+	return cloned
+}
+
+func deepCloneSchemaValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneSchemaMap(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, item := range typed {
+			cloned[index] = deepCloneSchemaValue(item)
+		}
+		return cloned
+	case json.RawMessage:
+		copied := make(json.RawMessage, len(typed))
+		copy(copied, typed)
+		return copied
+	default:
+		return typed
+	}
 }

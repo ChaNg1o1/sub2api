@@ -409,7 +409,7 @@ func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 			Type:        "function",
 			Name:        t.Name,
 			Description: t.Description,
-			Parameters:  t.InputSchema,
+			Parameters:  normalizeResponsesToolParameters(t.InputSchema),
 		})
 	}
 	return out

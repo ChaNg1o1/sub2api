@@ -215,6 +215,40 @@ func TestApplyCodexOAuthTransform_NormalizeCodexTools_PreservesResponsesFunction
 	require.True(t, ok)
 	require.Equal(t, "function", first["type"])
 	require.Equal(t, "bash", first["name"])
+	params, ok := first["parameters"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "object", params["type"])
+	require.Equal(t, map[string]any{}, params["properties"])
+	require.Equal(t, false, params["additionalProperties"])
+}
+
+func TestApplyCodexOAuthTransform_NormalizeCodexTools_FromChatCompletionsFunction(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"tools": []any{
+			map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":       "mcp_pencil__get_style_guide_tags",
+					"parameters": map[string]any{"type": "object"},
+				},
+			},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false)
+	require.True(t, result.Modified)
+
+	tools, ok := reqBody["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, tools, 1)
+
+	first, ok := tools[0].(map[string]any)
+	require.True(t, ok)
+	params, ok := first["parameters"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, map[string]any{}, params["properties"])
+	require.Equal(t, false, params["additionalProperties"])
 }
 
 func TestApplyCodexOAuthTransform_EmptyInput(t *testing.T) {

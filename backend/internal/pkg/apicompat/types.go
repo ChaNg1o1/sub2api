@@ -4,7 +4,10 @@
 // formats can be served through a unified gateway.
 package apicompat
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // ---------------------------------------------------------------------------
 // Anthropic Messages API types
@@ -205,6 +208,51 @@ type ResponsesTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+}
+
+func normalizeResponsesToolParameters(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal(trimmed, &schema); err != nil || schema == nil {
+		return raw
+	}
+
+	changed := false
+	typ, _ := schema["type"].(string)
+	if typ == "" {
+		schema["type"] = "object"
+		changed = true
+		typ = "object"
+	}
+
+	if typ == "object" {
+		if _, ok := schema["properties"]; !ok {
+			schema["properties"] = map[string]any{}
+			changed = true
+		}
+		if required, ok := schema["required"].([]any); ok && len(required) == 0 {
+			delete(schema, "required")
+			changed = true
+		}
+		if _, ok := schema["additionalProperties"]; !ok {
+			schema["additionalProperties"] = false
+			changed = true
+		}
+	}
+
+	if !changed {
+		return raw
+	}
+
+	normalized, err := json.Marshal(schema)
+	if err != nil {
+		return raw
+	}
+	return normalized
 }
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
