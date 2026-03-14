@@ -173,6 +173,9 @@ export interface OpsRequestDetail {
   platform?: string
   model?: string
   duration_ms?: number | null
+  openai_ws_queue_wait_ms?: number | null
+  openai_ws_conn_pick_ms?: number | null
+  openai_ws_conn_reused?: boolean | null
   status_code?: number | null
 
   error_id?: number | null

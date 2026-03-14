@@ -146,6 +146,23 @@ const kindBadgeClass = (kind: string) => {
   if (kind === 'error') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
 }
+
+function hasWSTiming(row: OpsRequestDetail) {
+  return (
+    typeof row.openai_ws_queue_wait_ms === 'number'
+    || typeof row.openai_ws_conn_pick_ms === 'number'
+    || typeof row.openai_ws_conn_reused === 'boolean'
+  )
+}
+
+function formatTimingMs(value: number | null | undefined) {
+  return typeof value === 'number' ? `${value} ms` : '-'
+}
+
+function formatTimingBool(value: boolean | null | undefined) {
+  if (typeof value !== 'boolean') return '-'
+  return value ? t('common.yes') : t('common.no')
+}
 </script>
 
 <template>
@@ -208,6 +225,9 @@ const kindBadgeClass = (kind: string) => {
                     {{ t('admin.ops.requestDetails.table.duration') }}
                   </th>
                   <th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                    {{ t('admin.ops.requestDetails.table.wsTtft') }}
+                  </th>
+                  <th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                     {{ t('admin.ops.requestDetails.table.status') }}
                   </th>
                   <th class="px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
@@ -236,6 +256,23 @@ const kindBadgeClass = (kind: string) => {
                   </td>
                   <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-600 dark:text-gray-300">
                     {{ typeof row.duration_ms === 'number' ? `${row.duration_ms} ms` : '-' }}
+                  </td>
+                  <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-300">
+                    <div v-if="hasWSTiming(row)" class="space-y-1">
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('admin.ops.requestDetails.timing.queueWait') }}</span>
+                        <span class="font-mono">{{ formatTimingMs(row.openai_ws_queue_wait_ms) }}</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('admin.ops.requestDetails.timing.connPick') }}</span>
+                        <span class="font-mono">{{ formatTimingMs(row.openai_ws_conn_pick_ms) }}</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium text-gray-500 dark:text-gray-400">{{ t('admin.ops.requestDetails.timing.connReused') }}</span>
+                        <span class="font-mono">{{ formatTimingBool(row.openai_ws_conn_reused) }}</span>
+                      </div>
+                    </div>
+                    <span v-else class="text-gray-400">-</span>
                   </td>
                   <td class="whitespace-nowrap px-4 py-3 text-xs text-gray-600 dark:text-gray-300">
                     {{ row.status_code ?? '-' }}

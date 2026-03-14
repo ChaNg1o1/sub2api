@@ -3530,12 +3530,18 @@ export default {
           success: 'SUCCESS',
           error: 'ERROR'
         },
+        timing: {
+          queueWait: 'Queue',
+          connPick: 'Pick',
+          connReused: 'Reused'
+        },
         table: {
           time: 'Time',
           kind: 'Kind',
           platform: 'Platform',
           model: 'Model',
           duration: 'Duration',
+          wsTtft: 'WS TTFT',
           status: 'Status',
           requestId: 'Request ID',
           actions: 'Actions'

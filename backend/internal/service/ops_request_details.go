@@ -23,7 +23,11 @@ type OpsRequestDetail struct {
 	Model    string `json:"model,omitempty"`
 
 	DurationMs *int `json:"duration_ms,omitempty"`
-	StatusCode *int `json:"status_code,omitempty"`
+	// Best-effort OpenAI WS TTFT breakdown for success rows; nil for non-WS, legacy, or error rows.
+	OpenAIWSQueueWaitMs *int  `json:"openai_ws_queue_wait_ms,omitempty"`
+	OpenAIWSConnPickMs  *int  `json:"openai_ws_conn_pick_ms,omitempty"`
+	OpenAIWSConnReused  *bool `json:"openai_ws_conn_reused,omitempty"`
+	StatusCode          *int  `json:"status_code,omitempty"`
 
 	// When Kind == "error", ErrorID links to /admin/ops/errors/:id.
 	ErrorID *int64 `json:"error_id,omitempty"`

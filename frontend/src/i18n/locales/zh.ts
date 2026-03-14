@@ -3703,12 +3703,18 @@ export default {
           success: '成功',
           error: '失败'
         },
+        timing: {
+          queueWait: '排队',
+          connPick: '选连',
+          connReused: '复用'
+        },
         table: {
           time: '时间',
           kind: '类型',
           platform: '平台',
           model: '模型',
           duration: '耗时',
+          wsTtft: 'WS TTFT',
           status: '状态码',
           requestId: '请求ID',
           actions: '操作'

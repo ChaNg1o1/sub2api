@@ -93,6 +93,9 @@ WITH combined AS (
     COALESCE(NULLIF(g.platform, ''), NULLIF(a.platform, ''), '') AS platform,
     ul.model AS model,
     ul.duration_ms AS duration_ms,
+    ul.openai_ws_queue_wait_ms AS openai_ws_queue_wait_ms,
+    ul.openai_ws_conn_pick_ms AS openai_ws_conn_pick_ms,
+    ul.openai_ws_conn_reused AS openai_ws_conn_reused,
     NULL::INT AS status_code,
     NULL::BIGINT AS error_id,
     NULL::TEXT AS phase,
@@ -117,6 +120,9 @@ WITH combined AS (
     COALESCE(NULLIF(o.platform, ''), NULLIF(g.platform, ''), NULLIF(a.platform, ''), '') AS platform,
     o.model AS model,
     o.duration_ms AS duration_ms,
+    NULL::INT AS openai_ws_queue_wait_ms,
+    NULL::INT AS openai_ws_conn_pick_ms,
+    NULL::BOOLEAN AS openai_ws_conn_reused,
     o.status_code AS status_code,
     o.id AS error_id,
     o.error_phase AS phase,
@@ -166,6 +172,9 @@ SELECT
   platform,
   model,
   duration_ms,
+  openai_ws_queue_wait_ms,
+  openai_ws_conn_pick_ms,
+  openai_ws_conn_reused,
   status_code,
   error_id,
   phase,
@@ -203,6 +212,13 @@ LIMIT $%d OFFSET $%d
 		i := v.Int64
 		return &i
 	}
+	toBoolPtr := func(v sql.NullBool) *bool {
+		if !v.Valid {
+			return nil
+		}
+		value := v.Bool
+		return &value
+	}
 
 	out := make([]*service.OpsRequestDetail, 0, pageSize)
 	for rows.Next() {
@@ -213,9 +229,12 @@ LIMIT $%d OFFSET $%d
 			platform  sql.NullString
 			model     sql.NullString
 
-			durationMs sql.NullInt64
-			statusCode sql.NullInt64
-			errorID    sql.NullInt64
+			durationMs          sql.NullInt64
+			openAIWSQueueWaitMs sql.NullInt64
+			openAIWSConnPickMs  sql.NullInt64
+			openAIWSConnReused  sql.NullBool
+			statusCode          sql.NullInt64
+			errorID             sql.NullInt64
 
 			phase    sql.NullString
 			severity sql.NullString
@@ -236,6 +255,9 @@ LIMIT $%d OFFSET $%d
 			&platform,
 			&model,
 			&durationMs,
+			&openAIWSQueueWaitMs,
+			&openAIWSConnPickMs,
+			&openAIWSConnReused,
 			&statusCode,
 			&errorID,
 			&phase,
@@ -257,12 +279,15 @@ LIMIT $%d OFFSET $%d
 			Platform:  strings.TrimSpace(platform.String),
 			Model:     strings.TrimSpace(model.String),
 
-			DurationMs: toIntPtr(durationMs),
-			StatusCode: toIntPtr(statusCode),
-			ErrorID:    toInt64Ptr(errorID),
-			Phase:      phase.String,
-			Severity:   severity.String,
-			Message:    message.String,
+			DurationMs:          toIntPtr(durationMs),
+			OpenAIWSQueueWaitMs: toIntPtr(openAIWSQueueWaitMs),
+			OpenAIWSConnPickMs:  toIntPtr(openAIWSConnPickMs),
+			OpenAIWSConnReused:  toBoolPtr(openAIWSConnReused),
+			StatusCode:          toIntPtr(statusCode),
+			ErrorID:             toInt64Ptr(errorID),
+			Phase:               phase.String,
+			Severity:            severity.String,
+			Message:             message.String,
 
 			UserID:    toInt64Ptr(userID),
 			APIKeyID:  toInt64Ptr(apiKeyID),
